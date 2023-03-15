@@ -34,6 +34,10 @@ public class TypeContext {
         return genericParameters;
     }
 
+    public Class<?> currentClass() {
+        return context.currentClass();
+    }
+
     public TypeContext(Type type) {
         Type t = resolve(type);
         if (t instanceof Class<?>) {
