@@ -4,6 +4,7 @@ import static smallville7123.reflectui.TypeContext.indent;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -26,6 +27,10 @@ public class TypeContextMethod {
             params.add(new TypeContext(parent.context, parent.context.resolveType(methodContext.resolveParameterType(i))));
         }
         parameters = Collections.unmodifiableList(params);
+    }
+
+    public Method getMethod() {
+        return methodContext.currentMethod();
     }
 
     public TypeContext getReturnType() {
