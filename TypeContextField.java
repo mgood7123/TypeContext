@@ -15,7 +15,11 @@ public class TypeContextField {
         this.field = field;
     }
 
-    TypeContext getReturnType() {
+    public Field getField() {
+        return field;
+    }
+
+    public TypeContext getReturnType() {
         return new TypeContext(parent.context, parent.context.resolveFieldType(field));
     }
 
