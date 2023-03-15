@@ -20,7 +20,11 @@ public class TypeContextField {
     }
 
     public TypeContext getReturnType() {
-        return new TypeContext(parent.context, parent.context.resolveFieldType(field));
+        return new TypeContext(parent.context, parent.context.resolveFieldType(field), false);
+    }
+
+    public String javaString() {
+        return TypeContext.javaString(this);
     }
 
     public void printDetailed() {
@@ -38,7 +42,7 @@ public class TypeContextField {
         printStream.println(indent(indent) + "TypeContextField {");
         indent++;
         TypeContext returnType = getReturnType();
-        printStream.println(indent(indent) + "field: " + returnType.context.toStringCurrentClass() + " " + field.getName());
+        printStream.println(indent(indent) + "field: " + javaString());
         printStream.println(indent(indent) + "field type: " + returnType.toDetailedString(indent + 1));
         indent--;
         printStream.print(indent(indent) + "}");
