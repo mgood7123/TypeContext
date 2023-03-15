@@ -6,21 +6,32 @@ import java.lang.reflect.Field;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.function.Predicate;
 
 import ru.vyarus.java.generics.resolver.GenericsResolver;
 import ru.vyarus.java.generics.resolver.context.GenericsContext;
+import ru.vyarus.java.generics.resolver.context.GenericsInfo;
+import smallville7123.reflectui.utils.PRINTLN;
+import smallville7123.reflectui.utils.Pair;
 
 public class TypeContext {
     GenericsContext context;
+    Class<?> current_class;
     int rank = 0;
     boolean selfBound = false;
 
     List<TypeContext> genericParameters = new ArrayList<>();
+    ArrayList<TypeContext> implementsContexts = new ArrayList<>();
+    TypeContext superclass;
+    private TypeContext parent;
+    ArrayList<TypeContext> interfaces = new ArrayList<>();
 
     public int getRank() {
         return rank;
@@ -34,47 +45,194 @@ public class TypeContext {
         return genericParameters;
     }
 
+    public TypeContext getGenericParameters(int index) {
+        return genericParameters.get(index);
+    }
+
     public Class<?> currentClass() {
-        return context.currentClass();
+        return current_class;
+    }
+
+    public ArrayList<TypeContext> getImplementsContexts() {
+        return implementsContexts;
+    }
+
+    public TypeContext getSuperclass() {
+        return superclass;
+    }
+
+    public ArrayList<TypeContext> getInterfaces() {
+        return interfaces;
     }
 
     public TypeContext(Type type) {
-        Type t = resolve(type);
-        if (t instanceof Class<?>) {
-            context = GenericsResolver.resolve((Class<?>) t);
-        } else {
-            throw new RuntimeException("resulting type is not an instance of class: " + t);
-        }
-        addGenerics();
-    }
-
-    // if this gets called, then type == currentClass, and we know the type is self bound
-    //
-    // eg: class S <T extends S<T>> // parameter type == S.class
-    TypeContext(Type type, boolean selfBound) {
-        Type t = resolve(type);
-        if (t instanceof Class<?>) {
-            context = GenericsResolver.resolve((Class<?>) t);
-            this.selfBound = true;
-        } else {
-            throw new RuntimeException("resulting type is not an instance of class: " + t);
-        }
+        this(null, type);
     }
 
     TypeContext(GenericsContext context, Type type) {
-        this.context = context.inlyingType(resolve(type));
-        addGenerics();
+        this(context, type, false);
+    }
+
+    TypeContext(GenericsContext context, Type type, boolean selfBound) {
+        this(null, context, type, selfBound, false);
+    }
+
+    TypeContext(TypeContext parent, GenericsContext context, Type type, boolean selfBound, boolean is_super) {
+        this.parent = parent;
+        while (parent != null) {
+            if (parent.current_class == type) {
+                this.selfBound = true;
+                this.current_class = parent.current_class;
+                this.context = parent.context;
+                this.rank = parent.rank;
+                this.implementsContexts = parent.implementsContexts;
+                this.genericParameters = parent.genericParameters;
+                this.interfaces = parent.interfaces;
+                this.superclass = parent.superclass;
+                return;
+            }
+            parent = parent.parent;
+        }
+        resolveContext(context, type, selfBound, is_super);
+        if (!selfBound) {
+            addGenerics();
+        }
+    }
+
+    private void resolveContext(GenericsContext context, Type type, boolean selfBound, boolean is_super) {
+        if (type == null) {
+            throw new RuntimeException("given type is null");
+        }
+        Type resolve = resolve(type);
+        if (resolve == null) {
+            throw new RuntimeException("resulting type is null");
+        }
+        this.selfBound = selfBound;
+        boolean valid = false;
+        if (context != null) {
+            if (resolve instanceof Class<?> || resolve instanceof ParameterizedType) {
+                this.context = is_super ? context.type(context.resolveClass(resolve)) : context.inlyingType(resolve);
+                this.current_class = resolve instanceof Class<?> && ((Class<?>) resolve).isPrimitive() ? (Class<?>) resolve : this.context.currentClass();
+                valid = true;
+            } else if (resolve instanceof WildcardType) {
+                final WildcardType wildcard = (WildcardType) resolve;
+                Type[] lowerBounds = wildcard.getLowerBounds();
+                if (lowerBounds.length > 0) {
+                    // ? super
+                    resolveContext(context, lowerBounds[0], selfBound, false);
+                    valid = true;
+                    if (lowerBounds.length > 1) {
+                        for (int i = 1, lowerBoundsLength = lowerBounds.length; i < lowerBoundsLength; i++) {
+                            Type lowerBound = lowerBounds[i];
+                            TypeContext typeContext = new TypeContext(context, context.inlyingType(lowerBound).currentClass(), false);
+                            typeContext.printDetailed();
+                            implementsContexts.add(typeContext);
+                        }
+                    }
+                } else {
+                    // ? extends
+                    // in java only one bound could be defined, but here could actually be repackaged TypeVariable
+                    Type[] upperBounds = wildcard.getUpperBounds();
+                    resolveContext(context, upperBounds[0], selfBound, false);
+                    valid = true;
+                    if (upperBounds.length > 1) {
+                        for (int i = 1, upperBoundsLength = upperBounds.length; i < upperBoundsLength; i++) {
+                            Type upperBound = upperBounds[i];
+                            TypeContext typeContext = new TypeContext(context, context.inlyingType(upperBound).currentClass(), false);
+                            typeContext.printDetailed();
+                            implementsContexts.add(typeContext);
+                        }
+                    }
+                }
+            }
+        } else if (resolve instanceof Class<?>) {
+            Class<?> resolve1 = (Class<?>) resolve;
+            this.context = GenericsResolver.resolve(resolve1);
+            current_class = resolve1.isPrimitive() ? resolve1 : this.context.currentClass();
+            valid = true;
+        }
+        if (!valid) {
+            throw new RuntimeException("resulting type is not an instance of class: " + resolve + ", CLASS: " + resolve.getClass());
+        }
+        if (current_class == null) {
+            throw new RuntimeException("resulting type has attempting to be resolved but resolved class is null: " + resolve + ", CLASS: " + resolve.getClass());
+        }
+        if (this.context == null) {
+            throw new RuntimeException("resulting type has attempting to be resolved but context is null: " + resolve + ", CLASS: " + resolve.getClass());
+        }
+        Type genericSuperclass = current_class.getGenericSuperclass();
+        if (genericSuperclass != null) {
+            if (genericSuperclass instanceof Class<?> || genericSuperclass instanceof ParameterizedType) {
+                if (genericSuperclass == Object.class) {
+                    superclass = new TypeContext(null, genericSuperclass, false);
+                } else {
+                    Class<?> c;
+                    if (genericSuperclass instanceof Class<?>) {
+                        c = (Class<?>) genericSuperclass;
+                    } else {
+                        c = (Class<?>) ((ParameterizedType) genericSuperclass).getRawType();
+                    }
+                    c = this.context.resolveClass(c);
+                    superclass = new TypeContext(this, this.context.type(c), c, false, true);
+                }
+            } else {
+                throw new RuntimeException("generic superclass is not an instance of class: " + genericSuperclass + ", CLASS: " + genericSuperclass.getClass());
+            }
+        }
+        for (Class<?> anInterface : current_class.getInterfaces()) {
+            interfaces.add(new TypeContext(this, this.context, anInterface, false, true));
+        }
     }
 
     void addGenerics() {
         List<Type> types = context.genericTypes();
         for (Type type_ : types) {
             if (type_ == context.currentClass()) {
-                genericParameters.add(new TypeContext(context.currentClass(), true));
+                genericParameters.add(new TypeContext(this, null, context.currentClass(), true, false));
             } else {
-                genericParameters.add(new TypeContext(context, type_));
+                genericParameters.add(new TypeContext(this, context, type_, false, false));
             }
         }
+    }
+
+    public static String contextToString(GenericsContext context, int indent) {
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        PrintStream printStream = new PrintStream(byteArrayOutputStream);
+        printStream.println();
+        printStream.println(indent(indent) + "GenericsContext {");
+        indent++;
+        printStream.println(indent(indent) + "current class: " + context.currentClass().toGenericString());
+        printStream.println(indent(indent) + "is inlying: " + context.isInlying());
+        printStream.println(indent(indent) + "owner class: " + context.ownerClass());
+        printStream.println(indent(indent) + "owner generics map: " + context.ownerGenericsMap());
+        printStream.println(indent(indent) + "visible generics map: " + context.visibleGenericsMap());
+        printStream.println(indent(indent) + "generics: " + context.generics());
+        printStream.println(indent(indent) + "generic types: " + context.genericTypes());
+        printStream.println(indent(indent) + "generics map: " + context.genericsMap());
+        printStream.println(indent(indent) + "generics scope: " + context.getGenericsScope());
+        printStream.println(indent(indent) + "generics source: " + context.getGenericsSource());
+        printStream.println(indent(indent) + "generics of: " + context.resolveGenericsOf(context.currentClass()));
+        printStream.println(indent(indent) + "type generics: " + context.resolveTypeGenerics(context.currentClass()));
+        printStream.println(indent(indent) + "generics info: " + genericsInfoToString(context.getGenericsInfo(), indent + 1));
+        indent--;
+        printStream.print(indent(indent) + "}");
+        printStream.flush();
+        return byteArrayOutputStream.toString();
+    }
+
+    private static String genericsInfoToString(GenericsInfo genericsInfo, int indent) {
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        PrintStream printStream = new PrintStream(byteArrayOutputStream);
+        printStream.println();
+        printStream.println(indent(indent) + "GenericsInfo {");
+        indent++;
+        printStream.println(indent(indent) + "root class: " + genericsInfo.getRootClass());
+        printStream.println(indent(indent) + "composing types: " + genericsInfo.getComposingTypes());
+        printStream.println(indent(indent) + "types map: " + genericsInfo.getTypesMap());
+        indent--;
+        printStream.print(indent(indent) + "}");
+        printStream.flush();
+        return byteArrayOutputStream.toString();
     }
 
     private Type resolve(Type type) {
@@ -323,8 +481,74 @@ public class TypeContext {
         }
     }
 
+    static String javaString(TypeContextField context) {
+        StringBuilder ret = new StringBuilder();
+        ret.append(javaString(context.getReturnType()));
+        ret.append(" ");
+        ret.append(context.field.getName());
+        return ret.toString();
+    }
+
+    static String javaString(TypeContextMethod context) {
+        StringBuilder ret = new StringBuilder();
+        ret.append(javaString(context.getReturnType()));
+        ret.append(" ");
+        ret.append(context.getMethod().getName());
+        ret.append("(");
+        Iterator<Pair<String, TypeContext>> iterator = context.parameters.iterator();
+        while (iterator.hasNext()) {
+            Pair<String, TypeContext> next = iterator.next();
+            ret.append(javaString(next.second));
+            ret.append(" ");
+            ret.append(next.first);
+            if (iterator.hasNext()) {
+                ret.append(", ");
+            }
+        }
+        ret.append(")");
+        return ret.toString();
+    }
+
+    static String javaString(TypeContext context) {
+        StringBuilder ret = new StringBuilder();
+        ret.append(context.current_class.toString());
+        if (context.genericParameters.size() > 0) {
+            ret.append("<");
+            Iterator<TypeContext> iterator = context.genericParameters.iterator();
+            while (iterator.hasNext()) {
+                ret.append(javaString(iterator.next()));
+                if (iterator.hasNext()) {
+                    ret.append(", ");
+                }
+            }
+            ret.append(">");
+        }
+
+        for (int i = 0; i < context.rank; i++) {
+            ret.append("[]");
+        }
+
+        return ret.toString();
+    }
+
+    public String javaString() {
+        return TypeContext.javaString(this);
+    }
+
+    public String currentClassAsString() {
+        StringBuilder ret = new StringBuilder();
+
+        ret.append(current_class.isPrimitive() ? current_class.toString() : context.toStringCurrentClass());
+
+        for (int i = 0; i < rank; i++) {
+            ret.append("[]");
+        }
+
+        return ret.toString();
+    }
+
     public static String toDetailedString(TypeContext typeContext, int indent) {
-        if (indent > 30) {
+        if (indent > 60) {
             return "<<<<OVERFLOW>>>>";
         }
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
@@ -333,7 +557,7 @@ public class TypeContext {
         printStream.println(indent(indent) + "TypeContext {");
         indent++;
 
-        printStream.println(indent(indent) + "type: " + typeContext.context.currentClass());
+        printStream.println(indent(indent) + "type: " + javaString(typeContext));
 
         if (typeContext.rank > 0) {
             printStream.println(indent(indent) + "rank: " + typeContext.rank);
@@ -341,14 +565,39 @@ public class TypeContext {
 
         if (typeContext.selfBound) {
             printStream.println(indent(indent) + "self bound: " + true);
-        }
+        } else {
+            // if we are self bound, do not recurse anything since we will recurse infinitely
+            StringBuilder acc = new StringBuilder();
+            int size = typeContext.implementsContexts.size();
+            if (size > 0) {
+                for (TypeContext implementsContext : typeContext.implementsContexts) {
+                    acc.append(implementsContext.toDetailedString(indent + 1));
+                }
+                printStream.println(indent(indent) + "implements: " + size + acc);
+            }
 
-        StringBuilder acc = new StringBuilder();
-        for (TypeContext genericParameter : typeContext.genericParameters) {
-            acc.append(genericParameter.toDetailedString(indent + 1));
-        }
-        printStream.println(indent(indent) + "genericParameters: " + typeContext.genericParameters.size() + acc);
+            int size1 = typeContext.genericParameters.size();
+            if (size1 > 0) {
+                acc = new StringBuilder();
+                for (TypeContext genericParameter : typeContext.genericParameters) {
+                    acc.append(genericParameter.toDetailedString(indent + 1));
+                }
+                printStream.println(indent(indent) + "genericParameters: " + size1 + acc);
+            }
 
+            int size2 = typeContext.interfaces.size();
+            if (size2 > 0) {
+                acc = new StringBuilder();
+                for (TypeContext i : typeContext.interfaces) {
+                    acc.append(i.toDetailedString(indent + 1));
+                }
+                printStream.println(indent(indent) + "interfaces: " + size2 + acc);
+            }
+
+            if (typeContext.superclass != null) {
+                printStream.println(indent(indent) + "superclass: " + typeContext.superclass.toDetailedString(indent + 1));
+            }
+        }
         indent--;
         printStream.print(indent(indent) + "}");
         printStream.flush();
