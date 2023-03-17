@@ -7,8 +7,10 @@ import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import ru.vyarus.java.generics.resolver.context.MethodGenericsContext;
 import smallville7123.reflectui.utils.Pair;
@@ -74,5 +76,29 @@ public class TypeContextMethod {
         printStream.print(indent(indent) + "}");
         printStream.flush();
         return byteArrayOutputStream.toString();
+    }
+
+    public boolean containsClasses(Class<?> ... c) {
+        if (!getReturnType().containsClasses(c)) return false;
+        for (Pair<String, TypeContext> t : parameters) {
+            if (!t.second.containsClasses(c)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public boolean containsClassesWithExtra(List<Class<?>> c, Class<?> ... extra) {
+        return containsClasses(c, Arrays.stream(extra).collect(Collectors.toList()));
+    }
+
+    public boolean containsClasses(List<Class<?>> ... c) {
+        if (!getReturnType().containsClasses(c)) return false;
+        for (Pair<String, TypeContext> t : parameters) {
+            if (!t.second.containsClasses(c)) {
+                return false;
+            }
+        }
+        return true;
     }
 }
