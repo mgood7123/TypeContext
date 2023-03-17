@@ -14,11 +14,11 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 import ru.vyarus.java.generics.resolver.GenericsResolver;
 import ru.vyarus.java.generics.resolver.context.GenericsContext;
 import ru.vyarus.java.generics.resolver.context.GenericsInfo;
-import smallville7123.reflectui.utils.PRINTLN;
 import smallville7123.reflectui.utils.Pair;
 
 public class TypeContext {
@@ -28,10 +28,42 @@ public class TypeContext {
     boolean selfBound = false;
 
     List<TypeContext> genericParameters = new ArrayList<>();
-    ArrayList<TypeContext> implementsContexts = new ArrayList<>();
+
+    List<TypeContext> implementsContexts = new ArrayList<>();
+    List<TypeContext> interfaces = new ArrayList<>();
+    private final List<List<TypeContext>> lists;
     TypeContext superclass;
     private TypeContext parent;
-    ArrayList<TypeContext> interfaces = new ArrayList<>();
+    private boolean is_super = false;
+
+    /**
+     * use {@link TypeContext#isSuper()}, along with {@link TypeContext#getImplementsContexts()}, to determine what additional classes we can accept
+     * <br>
+     * <br>
+     * used in wildcards
+     * <p>
+     * ? super EXTENDS_CLASS & IMPLEMENTS CLASS & IMPLEMENTS CLASS & ...
+     * <p>
+     * ? extends EXTENDS_CLASS & IMPLEMENTS CLASS & IMPLEMENTS CLASS & ...
+     * <br>
+     * <br>
+     * see {@link TypeContext#getImplementsContexts()}
+     * <br>
+     * <br>
+     * assuming Number, super == true means we accept Number and Object, but we DO NOT accept anything that extends from Number, such as Integer, and we DO NOT accept anything that extends from Object except fom Number
+     * <br>
+     * <br>
+     * assuming Number, super == false means we accept Integer, Number, or anything that extends from Number, but we DO NOT accept Object
+     * <br>
+     * <br>
+     * if Integer and super == true then we accept Integer, Number, and Object (Integer extends Number extends Object), but we DO NOT accept anything that extends from Integer (and since Integer is final, nothing can extend Integer), and we DO NOT accept anything that extends from Number except for Integer
+     * <br>
+     * <br>
+     * if Integer and super == false then we accept Integer, but we DO NOT accept Number, and Object (and since Integer is final, nothing can extend Integer)
+     */
+    public boolean isSuper() {
+        return is_super;
+    }
 
     public int getRank() {
         return rank;
@@ -53,7 +85,58 @@ public class TypeContext {
         return current_class;
     }
 
-    public ArrayList<TypeContext> getImplementsContexts() {
+    class FOO <T extends ArrayList<String> & List<String>> {}
+
+    FOO<ArrayList<String>> a;
+
+    /**
+     * use {@link TypeContext#getImplementsContexts()}, along with {@link TypeContext#isSuper()}, to determine what additional classes we can accept
+     * <p>
+     * used in wildcards
+     * <p>
+     * ? super EXTENDS_CLASS & IMPLEMENTS CLASS & IMPLEMENTS CLASS & ...
+     * <p>
+     * ? extends EXTENDS_CLASS & IMPLEMENTS CLASS & IMPLEMENTS CLASS & ...
+     * <br>
+     * <br>
+     * see {@link TypeContext#isSuper()}
+     * <br>
+     * <br>
+     * T super ArrayList<String> & List<String>
+     * <p>
+     * T accepts a class ArrayList or any class that ArrayList itself extends from
+     * <p>
+     * ArrayList already implements List
+     * <br>
+     * <br>
+     * <br>
+     * <br>
+     * T super Number & List<String>
+     * <p>
+     * T DOES NOT accept Number, since Number itself does not implement List
+     * <p>
+     * T accepts any class that Number itself extends from, but these MUST be extended from as they themselves do not implement List
+     * <br>
+     * <br>
+     * <br>
+     * <br>
+     * T extends ArrayList<String> & List<String>
+     * <p>
+     * T accepts a class ArrayList or any class that extends ArrayList
+     * <p>
+     * ArrayList already implements List
+     * <br>
+     * <br>
+     * <br>
+     * <br>
+     * T extends Number & List<String>
+     * <p>
+     * T accepts any class that extends Number, since Number itself does not implement List
+     * <p>
+     * any class extending Number, given to T, must implement List
+     * either directly, or from extending a class that does implement List
+     */
+    public List<TypeContext> getImplementsContexts() {
         return implementsContexts;
     }
 
@@ -61,7 +144,7 @@ public class TypeContext {
         return superclass;
     }
 
-    public ArrayList<TypeContext> getInterfaces() {
+    public List<TypeContext> getInterfaces() {
         return interfaces;
     }
 
@@ -78,6 +161,7 @@ public class TypeContext {
     }
 
     TypeContext(TypeContext parent, GenericsContext context, Type type, boolean selfBound, boolean is_super) {
+        this.lists = Arrays.asList(genericParameters, implementsContexts, interfaces);
         this.parent = parent;
         while (parent != null) {
             if (parent.current_class == type) {
@@ -118,15 +202,13 @@ public class TypeContext {
                 final WildcardType wildcard = (WildcardType) resolve;
                 Type[] lowerBounds = wildcard.getLowerBounds();
                 if (lowerBounds.length > 0) {
+                    this.is_super = true;
                     // ? super
                     resolveContext(context, lowerBounds[0], selfBound, false);
                     valid = true;
                     if (lowerBounds.length > 1) {
                         for (int i = 1, lowerBoundsLength = lowerBounds.length; i < lowerBoundsLength; i++) {
-                            Type lowerBound = lowerBounds[i];
-                            TypeContext typeContext = new TypeContext(context, context.inlyingType(lowerBound).currentClass(), false);
-                            typeContext.printDetailed();
-                            implementsContexts.add(typeContext);
+                            implementsContexts.add(new TypeContext(context, context.inlyingType(lowerBounds[i]).currentClass(), false));
                         }
                     }
                 } else {
@@ -137,10 +219,7 @@ public class TypeContext {
                     valid = true;
                     if (upperBounds.length > 1) {
                         for (int i = 1, upperBoundsLength = upperBounds.length; i < upperBoundsLength; i++) {
-                            Type upperBound = upperBounds[i];
-                            TypeContext typeContext = new TypeContext(context, context.inlyingType(upperBound).currentClass(), false);
-                            typeContext.printDetailed();
-                            implementsContexts.add(typeContext);
+                            implementsContexts.add(new TypeContext(context, context.inlyingType(upperBounds[i]).currentClass(), false));
                         }
                     }
                 }
@@ -252,51 +331,35 @@ public class TypeContext {
         }
     }
 
-    public TypeContextField findField(String fieldName) {
-        try {
-            return new TypeContextField(this, getFieldRecursive(fieldName));
-        } catch (NoSuchFieldException e) {
-            throw new RuntimeException(e);
-        }
+    public TypeContextField findField(String fieldName) throws NoSuchFieldException {
+        return new TypeContextField(this, getFieldRecursive(fieldName));
     }
 
-    public TypeContextField[] findFields(Predicate<Field> predicate) {
-        try {
-            List<TypeContextField> list = new ArrayList<>();
-            for (Field field : getFieldsRecursive(predicate)) {
-                TypeContextField typeContextField = new TypeContextField(this, field);
-                list.add(typeContextField);
-            }
-            return list.toArray(new TypeContextField[0]);
-        } catch (NoSuchFieldException e) {
-            throw new RuntimeException(e);
+    public TypeContextField[] findFields(Predicate<Field> predicate) throws NoSuchFieldException {
+        List<TypeContextField> list = new ArrayList<>();
+        for (Field field : getFieldsRecursive(predicate)) {
+            TypeContextField typeContextField = new TypeContextField(this, field);
+            list.add(typeContextField);
         }
+        return list.toArray(new TypeContextField[0]);
     }
 
-    public TypeContextMethod[] findMethods(String methodName) {
-        try {
-            List<TypeContextMethod> list = new ArrayList<>();
-            for (Method method : getMethodsRecursive(methodName)) {
-                TypeContextMethod typeContextField = new TypeContextMethod(this, context.method(method));
-                list.add(typeContextField);
-            }
-            return list.toArray(new TypeContextMethod[0]);
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException(e);
+    public TypeContextMethod[] findMethods(String methodName) throws NoSuchMethodException {
+        List<TypeContextMethod> list = new ArrayList<>();
+        for (Method method : getMethodsRecursive(methodName)) {
+            TypeContextMethod typeContextField = new TypeContextMethod(this, context.inlyingType(method.getDeclaringClass()).method(method));
+            list.add(typeContextField);
         }
+        return list.toArray(new TypeContextMethod[0]);
     }
 
-    public TypeContextMethod[] findMethods(Predicate<Method> predicate) {
-        try {
-            List<TypeContextMethod> list = new ArrayList<>();
-            for (Method method : getMethodsRecursive(predicate)) {
-                TypeContextMethod typeContextField = new TypeContextMethod(this, context.method(method));
-                list.add(typeContextField);
-            }
-            return list.toArray(new TypeContextMethod[0]);
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException(e);
+    public TypeContextMethod[] findMethods(Predicate<Method> predicate) throws NoSuchMethodException {
+        List<TypeContextMethod> list = new ArrayList<>();
+        for (Method method : getMethodsRecursive(predicate)) {
+            TypeContextMethod typeContextMethod = new TypeContextMethod(this, context.inlyingType(method.getDeclaringClass()).method(method));
+            list.add(typeContextMethod);
         }
+        return list.toArray(new TypeContextMethod[0]);
     }
 
     private static <R extends Throwable> R replaceMessage(R throwable, String newMessage) {
@@ -322,15 +385,15 @@ public class TypeContext {
         return r;
     }
 
-    public Field getFieldRecursive(String fieldName) throws NoSuchFieldException {
+    private Field getFieldRecursive(String fieldName) throws NoSuchFieldException {
         return getFieldRecursive(context.currentClass(), fieldName);
     }
 
-    public Field[] getFieldsRecursive(Predicate<Field> predicate) throws NoSuchFieldException {
+    private Field[] getFieldsRecursive(Predicate<Field> predicate) throws NoSuchFieldException {
         return getFieldsRecursive(context.currentClass(), predicate);
     }
 
-    public static Field getFieldRecursive(Class<?> clazz, String fieldName) throws NoSuchFieldException {
+    private static Field getFieldRecursive(Class<?> clazz, String fieldName) throws NoSuchFieldException {
         try {
             return getFieldsRecursive(clazz, f -> f.getName().contentEquals(fieldName), new ArrayList<>()).get(0);
         } catch (NoSuchFieldException e) {
@@ -338,7 +401,7 @@ public class TypeContext {
         }
     }
 
-    public static Field[] getFieldsRecursive(Class<?> clazz, Predicate<Field> predicate) throws NoSuchFieldException {
+    private static Field[] getFieldsRecursive(Class<?> clazz, Predicate<Field> predicate) throws NoSuchFieldException {
         return getFieldsRecursive(clazz, predicate, new ArrayList<>()).toArray(new Field[0]);
     }
 
@@ -380,15 +443,15 @@ public class TypeContext {
         return info;
     }
 
-    public Method[] getMethodsRecursive(String methodName) throws NoSuchMethodException {
+    private Method[] getMethodsRecursive(String methodName) throws NoSuchMethodException {
         return getMethodsRecursive(context.currentClass(), methodName);
     }
 
-    public Method[] getMethodsRecursive(Predicate<Method> predicate) throws NoSuchMethodException {
+    private Method[] getMethodsRecursive(Predicate<Method> predicate) throws NoSuchMethodException {
         return getMethodsRecursive(context.currentClass(), predicate);
     }
 
-    public static Method[] getMethodsRecursive(Class<?> clazz, String methodName) throws NoSuchMethodException {
+    private static Method[] getMethodsRecursive(Class<?> clazz, String methodName) throws NoSuchMethodException {
         try {
             return getMethodsRecursive(clazz, f -> f.getName().contentEquals(methodName), 0, new ArrayList<>()).toArray(new Method[0]);
         } catch (NoSuchMethodException e) {
@@ -396,7 +459,7 @@ public class TypeContext {
         }
     }
 
-    public static Method[] getMethodsRecursive(Class<?> clazz, Predicate<Method> predicate) throws NoSuchMethodException {
+    private static Method[] getMethodsRecursive(Class<?> clazz, Predicate<Method> predicate) throws NoSuchMethodException {
         return getMethodsRecursive(clazz, predicate, 0, new ArrayList<>()).toArray(new Method[0]);
     }
 
@@ -602,5 +665,93 @@ public class TypeContext {
         printStream.print(indent(indent) + "}");
         printStream.flush();
         return byteArrayOutputStream.toString();
+    }
+
+    /**
+     * returns true if EVERY CLASS matches any of the classes contained in c
+     */
+    public boolean containsClasses(Class<?> ... c) {
+        return containsClasses(Arrays.stream(c).collect(Collectors.toList()));
+    }
+
+    /**
+     * returns true if EVERY CLASS matches any of the classes contained in c and extra
+     */
+    public boolean containsClassesWithExtra(List<Class<?>> c, Class<?> ... extra) {
+        return containsClasses(c, Arrays.stream(extra).collect(Collectors.toList()));
+    }
+
+    /**
+     * returns true if EVERY CLASS matches any of the classes contained in c
+     */
+    public boolean containsClasses(List<Class<?>> ... c) {
+        TypeContext sc = this;
+        while (sc != null) {
+            boolean b = false;
+            for (List<Class<?>> classes : c) {
+                for (Class<?> p : classes) {
+                    if (p == sc.current_class) {
+                        b = true;
+                        break;
+                    }
+                }
+            }
+            if (!b) {
+                return false;
+            }
+
+            if (sc.selfBound) {
+                // if we are self bound, do not recurse anything since we will recurse infinitely
+                return true;
+            }
+
+            for (List<TypeContext> list : sc.lists) {
+                for (TypeContext typeContext : list) {
+                    if (!typeContext.containsClasses(c)) {
+                        return false;
+                    }
+                }
+            }
+
+            sc = sc.superclass;
+            if (sc == null) {
+                return true;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * returns TypeContext if TARGET_CLASS matches this class, or any of its interfaces, superclasses, or implementing contexts (if originating from wildcard, see {@link TypeContext#getImplementsContexts()} and {@link TypeContext#isSuper()})
+     */
+    public TypeContext findSuperclassOrInterface(Class<?> TARGET_CLASS) {
+        TypeContext sc = this;
+        while (true) {
+            if (sc.current_class == TARGET_CLASS) {
+                return sc;
+            }
+
+            if (sc.selfBound) {
+                // if we are self bound, do not recurse anything since we will recurse infinitely
+                return null;
+            }
+
+            List<List<TypeContext>> listList = sc.lists;
+            // generic parameters is at index 0, skip it
+            for (int i = 1, listListSize = listList.size(); i < listListSize; i++) {
+                List<TypeContext> list = listList.get(i);
+                for (TypeContext typeContext : list) {
+                    TypeContext superclassOrInterface = typeContext.findSuperclassOrInterface(TARGET_CLASS);
+                    if (superclassOrInterface != null) {
+                        return superclassOrInterface;
+                    }
+                }
+            }
+
+            sc = sc.superclass;
+            if (sc == null) {
+                return null;
+            }
+        }
     }
 }
