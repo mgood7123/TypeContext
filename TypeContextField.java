@@ -5,6 +5,9 @@ import static smallville7123.reflectui.TypeContext.indent;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Field;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 
 public class TypeContextField {
     TypeContext parent;
@@ -48,5 +51,17 @@ public class TypeContextField {
         printStream.print(indent(indent) + "}");
         printStream.flush();
         return byteArrayOutputStream.toString();
+    }
+
+    public boolean containsClasses(Class<?> ... c) {
+        return getReturnType().containsClasses(c);
+    }
+
+    public boolean containsClassesWithExtra(List<Class<?>> c, Class<?> ... extra) {
+        return containsClasses(c, Arrays.stream(extra).collect(Collectors.toList()));
+    }
+
+    public boolean containsClasses(List<Class<?>> ... c) {
+        return getReturnType().containsClasses(c);
     }
 }
