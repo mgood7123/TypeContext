@@ -6,6 +6,7 @@ Java Reflection based type analysis powered by Generics-Resolver 3.0.3
 // test for List<String>
 
 // assume Foo exists and it contains a field named "foo" (public or non public)
+//
 TypeContext ret = new TypeContext(Foo.class).findField("foo").getReturnType();
 boolean m = false;
 
